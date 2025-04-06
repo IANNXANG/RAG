@@ -1,4 +1,5 @@
 import os
+import shutil
 from typing import List
 from dotenv import load_dotenv
 from langchain.chat_models import ChatOpenAI
@@ -7,14 +8,18 @@ from langchain_community.vectorstores import Chroma
 from langchain.embeddings import HuggingFaceEmbeddings
 from langchain.chains import RetrievalQA
 from langchain.prompts import PromptTemplate
-import requests
-import json
 
-# 加载环境变量
-load_dotenv()
+
+
 
 class RAGBot:
-    def __init__(self):
+    def __init__(self, clear_previous=True):
+        # 清除之前的 ChromaDB 内容
+        if clear_previous and os.path.exists("./chroma_db"):
+            print("删除之前的 ChromaDB 内容...")
+            shutil.rmtree("./chroma_db")
+            print("已删除之前的数据库内容。")
+            
         # 初始化本地 vLLM 模型
         self.llm = ChatOpenAI(
             model_name="ui-tars",
@@ -107,18 +112,26 @@ class RAGBot:
         print(f"\n===== 检索过程 =====")
         print(f"问题: {question}")
         
-        # 获取检索器
-        retriever = self.vectorstore.as_retriever()
+        # 使用 _collection.query 直接获取相关性得分
+        query_embedding = self.embeddings.embed_query(question)
+        results = self.vectorstore._collection.query(
+            query_embeddings=query_embedding,
+            n_results=4,
+            include=["documents", "embeddings", "metadatas", "distances"]
+        )
         
-        # 执行检索
-        retrieved_docs = retriever.get_relevant_documents(question)
-        
-        # 打印检索结果
-        print(f"检索到 {len(retrieved_docs)} 个相关文档片段")
-        for i, doc in enumerate(retrieved_docs):
+        # 打印检索结果和相关性得分
+        print(f"检索到 {len(results['documents'][0])} 个相关文档片段")
+        for i, (doc, distance) in enumerate(zip(results['documents'][0], results['distances'][0])):
+            # 距离转换为相似度得分 (ChromaDB 返回的是距离，越小越相关)
+            similarity_score = 1 - distance  # 距离转换为相似度(0-1之间)
             print(f"\n相关文档 #{i+1}:")
-            print(f"相关性得分: {'不可直接获取'}")  # ChromaDB 不直接返回得分
-            print(f"内容: {doc.page_content[:150]}...")
+            print(f"相关性得分: {similarity_score:.4f}")  # 保留4位小数
+            print(f"内容: {doc[:150]}...")
+        
+        # 使用检索器获取文档对象用于问答
+        retriever = self.vectorstore.as_retriever()
+        retrieved_docs = retriever.get_relevant_documents(question)
             
         # 创建并调用问答链
         chain = self.setup_qa_chain()
