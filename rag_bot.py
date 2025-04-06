@@ -75,7 +75,7 @@ class RAGBot:
         for i, chunk in enumerate(splits):
             print(f"\n切片 #{i+1}:")
             print(f"长度: {len(chunk.page_content)} 字符")
-            print(f"内容: {chunk.page_content[:100]}...")
+            print(f"内容: {chunk.page_content}")
         
         # 创建向量存储
         # 向量存储创建过程：
