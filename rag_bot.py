@@ -98,7 +98,7 @@ class RAGBot:
     def setup_qa_chain(self):
         """设置问答链"""
         # 创建提示模板
-        prompt_template = """使用以下上下文来回答问题。如果你不知道答案，就说你不知道，不要试图编造答案。
+        prompt_template = """使用以下上下文来回答问题。
 
 上下文: {context}
 
@@ -135,40 +135,31 @@ class RAGBot:
         query_embedding = self.embeddings.embed_query(question)
         
         # 第2步：在向量数据库中查询与问题向量最相似的文档向量
-        # n_results=4：返回最相似的4个文档
+        # n_results=2：返回最相似的4个文档
         # include参数指定返回的信息，包括文档内容、嵌入向量、元数据和距离
         results = self.vectorstore._collection.query(
             query_embeddings=query_embedding,
-            n_results=4,
+            n_results=2,
             include=["documents", "embeddings", "metadatas", "distances"]
         )
         
         # 打印检索结果和相关性得分
         print(f"检索到 {len(results['documents'][0])} 个相关文档片段")
         for i, (doc, distance) in enumerate(zip(results['documents'][0], results['distances'][0])):
-            # 第3步：距离转换为相似度得分
-            # 相关性计算说明：
-            # 1. ChromaDB返回的是向量间的距离(distance)，距离越小表示越相似
-            # 2. 常见的距离计算方法包括：
-            #    - 余弦距离：1 - 余弦相似度，两个向量夹角的余弦值，范围为0-2，值越小越相似
-            #    - 欧氏距离：两点在欧氏空间中的直线距离
-            # 3. 这里使用 1-distance 将距离转换为相似度分数
-            #    - 当向量完全相同时，距离为0，相似度为1（最高）
-            #    - 当向量完全不同时，距离接近于1或更大，相似度接近于0或为负（最低）
-            # 4. 在归一化向量上（如本代码中设置normalize_embeddings=True）:
-            #    - 余弦距离范围通常是0-2
-            #    - 欧氏距离的平方范围通常是0-4
-            # 注意：具体的距离范围取决于ChromaDB的具体实现和设置
-            similarity_score = 1 - distance  # 将距离转换为相似度(通常为0-1之间)
-            
+            # 直接打印原始距离值
+            # 距离值说明：
+            # - 距离越小表示文档与查询越相似
+            # - ChromaDB返回的是向量间的距离metric，可能是欧氏距离、余弦距离等
+            # - 不同的距离度量有不同的值域范围
             print(f"\n相关文档 #{i+1}:")
-            print(f"相关性得分: {similarity_score:.4f}")  # 保留4位小数
+            print(f"原始距离值: {distance:.6f}")  # 保留6位小数
             print(f"内容: {doc[:150]}...")
         
         # 第4步：使用检索器获取文档对象用于问答
         # 这里使用LangChain的高级API获取相关文档，内部也是使用相似度搜索
         retriever = self.vectorstore.as_retriever()
         retrieved_docs = retriever.get_relevant_documents(question)
+        print(f"最终检索到的文档: {retrieved_docs}")
             
         # 第5步：创建并调用问答链
         # 将检索到的文档和问题一起发送给语言模型生成回答
