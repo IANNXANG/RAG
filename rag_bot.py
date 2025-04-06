@@ -33,7 +33,7 @@ class RAGBot:
         # 2. 这些向量捕捉了文本的语义信息，语义相似的文本在向量空间中距离较近
         # 3. 通过计算向量间的距离或相似度，可以找到语义上相似的文本
         self.embeddings = HuggingFaceEmbeddings(
-            model_name="shibing624/text2vec-base-chinese",  # 中文文本向量模型
+            model_name="BAAI/bge-small-zh",  # 更小更高效的中文向量模型（约340MB）
             model_kwargs={'device': 'cpu'},  # 在CPU上运行模型
             encode_kwargs={'normalize_embeddings': True}  # 向量归一化处理
             # 向量归一化的意义：
