@@ -129,40 +129,23 @@ class RAGBot:
         print(f"\n===== 检索过程 =====")
         print(f"问题: {question}")
         
-        # 使用 _collection.query 直接获取相关性得分
-        # 第1步：将用户问题转换为向量表示
-        # 这里使用嵌入模型将文本问题转换为高维向量空间中的一个点
-        query_embedding = self.embeddings.embed_query(question)
-        
-        # 第2步：在向量数据库中查询与问题向量最相似的文档向量
-        # n_results=2：返回最相似的4个文档
-        # include参数指定返回的信息，包括文档内容、嵌入向量、元数据和距离
-        results = self.vectorstore._collection.query(
-            query_embeddings=query_embedding,
-            n_results=2,
-            include=["documents", "embeddings", "metadatas", "distances"]
-        )
-        
-        # 打印检索结果和相关性得分
-        print(f"检索到 {len(results['documents'][0])} 个相关文档片段")
-        for i, (doc, distance) in enumerate(zip(results['documents'][0], results['distances'][0])):
-            # 直接打印原始距离值
-            # 距离值说明：
-            # - 距离越小表示文档与查询越相似
-            # - ChromaDB返回的是向量间的距离metric，可能是欧氏距离、余弦距离等
-            # - 不同的距离度量有不同的值域范围
-            print(f"\n相关文档 #{i+1}:")
-            print(f"原始距离值: {distance:.6f}")  # 保留6位小数
-            print(f"内容: {doc[:150]}...")
-        
-        # 第4步：使用检索器获取文档对象用于问答
-        # 这里使用LangChain的高级API获取相关文档，内部也是使用相似度搜索
-        retriever = self.vectorstore.as_retriever()
+        # 使用LangChain的检索器获取相关文档，只进行一次检索
+        # 这样确保展示的文档与实际用于回答的文档完全一致
+        retriever = self.vectorstore.as_retriever(search_kwargs={"k": 2})
         retrieved_docs = retriever.get_relevant_documents(question)
-        print(f"最终检索到的文档: {retrieved_docs}")
+        
+        # 打印检索结果信息
+        print(f"检索到 {len(retrieved_docs)} 个相关文档片段")
+        
+        # 对于每个检索到的文档，打印内容并计算原始距离
+        for i, doc in enumerate(retrieved_docs):
+            # 使用嵌入模型计算文档与问题的向量，以便后续计算距离
+            # 由于我们不直接使用ChromaDB API，无法直接获取距离值
+            # 因此这里只展示文档内容，不展示距离值
+            print(f"\n相关文档 #{i+1}:")
+            print(f"内容: {doc.page_content}")
             
-        # 第5步：创建并调用问答链
-        # 将检索到的文档和问题一起发送给语言模型生成回答
+        # 创建并调用问答链
         chain = self.setup_qa_chain()
         response = chain.invoke({"query": question})
         return response["result"]
