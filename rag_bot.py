@@ -8,6 +8,7 @@ from langchain.embeddings import HuggingFaceEmbeddings
 from langchain.chains import RetrievalQA
 from langchain.prompts import PromptTemplate
 import requests
+import json
 
 # 加载环境变量
 load_dotenv()
@@ -39,10 +40,25 @@ class RAGBot:
         # 初始化向量存储
         self.vectorstore = None
         
+        # 存储文档切片
+        self.document_chunks = []
+        
     def load_documents(self, texts: List[str]):
         """加载文档并创建向量存储"""
         # 分割文本
         splits = self.text_splitter.create_documents(texts)
+        
+        # 保存文档切片以便查看
+        self.document_chunks = splits
+        
+        # 打印切片信息
+        print(f"\n===== 文档切片信息 =====")
+        print(f"总共将 {len(texts)} 个文档切分为 {len(splits)} 个块")
+        
+        for i, chunk in enumerate(splits):
+            print(f"\n切片 #{i+1}:")
+            print(f"长度: {len(chunk.page_content)} 字符")
+            print(f"内容: {chunk.page_content[:100]}...")
         
         # 创建向量存储
         self.vectorstore = Chroma.from_documents(
@@ -50,6 +66,12 @@ class RAGBot:
             embedding=self.embeddings,
             persist_directory="./chroma_db"
         )
+        
+        # 打印 ChromaDB 存储信息
+        print(f"\n===== ChromaDB 存储信息 =====")
+        collection = self.vectorstore._collection
+        print(f"Collection 名称: {collection.name}")
+        print(f"Collection 中的文档数量: {collection.count()}")
         
     def setup_qa_chain(self):
         """设置问答链"""
@@ -81,7 +103,24 @@ class RAGBot:
         """向机器人提问"""
         if not self.vectorstore:
             return "请先加载一些文档！"
+        
+        print(f"\n===== 检索过程 =====")
+        print(f"问题: {question}")
+        
+        # 获取检索器
+        retriever = self.vectorstore.as_retriever()
+        
+        # 执行检索
+        retrieved_docs = retriever.get_relevant_documents(question)
+        
+        # 打印检索结果
+        print(f"检索到 {len(retrieved_docs)} 个相关文档片段")
+        for i, doc in enumerate(retrieved_docs):
+            print(f"\n相关文档 #{i+1}:")
+            print(f"相关性得分: {'不可直接获取'}")  # ChromaDB 不直接返回得分
+            print(f"内容: {doc.page_content[:150]}...")
             
+        # 创建并调用问答链
         chain = self.setup_qa_chain()
         response = chain.invoke({"query": question})
         return response["result"]
@@ -108,6 +147,21 @@ if __name__ == "__main__":
     
     # 加载文档
     bot.load_documents(sample_docs)
+    
+    # 打印 ChromaDB 目录内容
+    print("\n===== ChromaDB 目录内容 =====")
+    try:
+        chroma_files = os.listdir("./chroma_db")
+        print(f"ChromaDB 目录内容: {chroma_files}")
+        
+        # 如果有子目录，也列出
+        for file in chroma_files:
+            if os.path.isdir(f"./chroma_db/{file}"):
+                subfolder_files = os.listdir(f"./chroma_db/{file}")
+                print(f"{file} 子目录内容: {subfolder_files}")
+                
+    except Exception as e:
+        print(f"获取 ChromaDB 目录信息时出错: {e}")
     
     # 测试问答
     while True:
