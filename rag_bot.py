@@ -12,7 +12,28 @@ from langchain.prompts import PromptTemplate
 
 
 class RAGBot:
-    def __init__(self, clear_previous=True):
+    def __init__(self, clear_previous=None, reinitialize_kb=True):
+        """
+        初始化RAG机器人
+        
+        参数:
+            clear_previous (bool): 是否清除之前的ChromaDB内容
+                                  默认值取决于reinitialize_kb:
+                                  - 若reinitialize_kb=True，则默认clear_previous=True
+                                  - 若reinitialize_kb=False，则默认clear_previous=False
+            reinitialize_kb (bool): 是否重新初始化知识库，默认为True。
+                                   如果设为False，将尝试加载已有的知识库
+        """
+        # 是否重新初始化知识库的标志
+        self.reinitialize_kb = reinitialize_kb
+        
+        # 设置清除数据库的默认值，与reinitialize_kb保持一致
+        if clear_previous is None:
+            clear_previous = reinitialize_kb
+        
+        # 设置检索文档数量
+        self.retrieval_k = 2
+        
         # 清除之前的 ChromaDB 内容
         if clear_previous and os.path.exists("./chroma_db"):
             print("删除之前的 ChromaDB 内容...")
@@ -115,7 +136,7 @@ class RAGBot:
         chain = RetrievalQA.from_chain_type(
             llm=self.llm,
             chain_type="stuff",
-            retriever=self.vectorstore.as_retriever(),
+            retriever=self.vectorstore.as_retriever(search_kwargs={"k": self.retrieval_k}),
             chain_type_kwargs={"prompt": PROMPT}
         )
         
@@ -131,7 +152,7 @@ class RAGBot:
         
         # 使用LangChain的检索器获取相关文档，只进行一次检索
         # 这样确保展示的文档与实际用于回答的文档完全一致
-        retriever = self.vectorstore.as_retriever(search_kwargs={"k": 2})
+        retriever = self.vectorstore.as_retriever(search_kwargs={"k": self.retrieval_k})
         retrieved_docs = retriever.get_relevant_documents(question)
         
         # 打印检索结果信息
@@ -152,10 +173,45 @@ class RAGBot:
 
 # 使用示例
 if __name__ == "__main__":
-    # 创建机器人实例
-    bot = RAGBot()
+    # 解析命令行参数
+    import argparse
     
-    # 更丰富的示例文档
+    parser = argparse.ArgumentParser(description="RAG对话机器人")
+    parser.add_argument('--keep_kb', action='store_true', 
+                        help='保留现有知识库，不重新初始化 (默认: 不保留)')
+    parser.add_argument('--clear_db', action='store_true',
+                        help='强制清除现有数据库 (默认: 与知识库初始化选项一致)')
+    parser.add_argument('--no_clear_db', action='store_true',
+                        help='强制保留现有数据库 (默认: 与知识库初始化选项一致)')
+    parser.add_argument('--top_k', type=int, default=2,
+                        help='检索的相关文档数量 (默认: 2)')
+    args = parser.parse_args()
+    
+    # 确定是否要清除数据库
+    clear_previous = None  # 默认情况下使用与reinitialize_kb一致的设置
+    if args.clear_db:
+        clear_previous = True  # 强制清除数据库
+    elif args.no_clear_db:
+        clear_previous = False  # 强制保留数据库
+    
+    # 创建机器人实例
+    bot = RAGBot(
+        clear_previous=clear_previous, 
+        reinitialize_kb=not args.keep_kb
+    )
+    
+    # 设置检索文档数量
+    bot.retrieval_k = args.top_k
+    
+    # 打印当前配置
+    print("\n===== 当前配置 =====")
+    print(f"保留知识库: {'是' if args.keep_kb else '否'}")
+    print(f"清除数据库: {'是' if clear_previous else '否' if clear_previous is not None else '与知识库初始化设置一致'}")
+    print(f"检索文档数: {args.top_k}")
+    print(f"嵌入模型: BAAI/bge-small-zh")
+    print(f"文本分割大小: 1000字符, 重叠: 200字符")
+    
+    # 定义示例文档（仅定义一次，避免重复）
     sample_docs = [
         "LangChain 是一个用于构建大型语言模型（LLM）应用的开源框架。它提供了一系列工具、组件和接口，使开发者能够更容易地创建由 LLM 驱动的应用程序。LangChain 的核心理念是将 LLM 与其他计算或知识源连接起来，从而构建更加强大和可靠的应用。它支持各种流行的 LLM，如 GPT-4、Claude、Llama 等，并提供了丰富的集成能力。",
         
@@ -170,8 +226,31 @@ if __name__ == "__main__":
         "文本分割（Text Splitting）是 RAG 流程中的关键步骤，它将长文档分割成较小的文本块，以便于向量化和检索。合适的分割策略对 RAG 系统的性能有着重要影响：如果块太大，可能包含过多无关信息，降低检索精度；如果块太小，可能丢失上下文，影响理解。常见的分割方法包括基于字符的分割、基于句子的分割、基于段落的分割以及递归字符分割。为了保持上下文连贯性，分割器通常会在相邻块之间保留一定的重叠区域。",
     ]
     
-    # 加载文档
-    bot.load_documents(sample_docs)
+    # 如果需要重新初始化知识库，则加载示例文档
+    if bot.reinitialize_kb:
+        # 加载文档
+        bot.load_documents(sample_docs)
+    else:
+        # 如果不重新初始化，尝试连接到现有数据库
+        if os.path.exists("./chroma_db"):
+            print("\n===== 使用现有知识库 =====")
+            # 创建向量存储
+            try:
+                bot.vectorstore = Chroma(
+                    persist_directory="./chroma_db",
+                    embedding_function=bot.embeddings
+                )
+                print(f"成功加载现有知识库，包含 {bot.vectorstore._collection.count()} 个文档")
+            except Exception as e:
+                print(f"加载现有知识库失败: {e}")
+                print("将重新初始化知识库...")
+                bot.reinitialize_kb = True
+                # 重新初始化知识库
+                bot.load_documents(sample_docs)
+        else:
+            print("\n===== 未找到现有知识库，将创建新知识库 =====")
+            bot.reinitialize_kb = True
+            bot.load_documents(sample_docs)
     
     # 打印 ChromaDB 目录内容
     print("\n===== ChromaDB 目录内容 =====")

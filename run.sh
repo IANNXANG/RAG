@@ -19,6 +19,64 @@ print_error() {
     echo -e "${RED}[错误]${NC} $1"
 }
 
+# 显示帮助信息
+show_help() {
+    echo "RAG机器人运行脚本"
+    echo "用法: $0 [选项]"
+    echo "选项:"
+    echo "  -h, --help         显示帮助信息"
+    echo "  -k, --keep-kb      保留现有知识库，不重新初始化 (默认: 不保留)"
+    echo "  -c, --clear-db     强制清除现有数据库 (默认: 与知识库初始化选项一致)"
+    echo "  -p, --preserve-db  强制保留现有数据库 (默认: 与知识库初始化选项一致)"
+    echo "  -t, --no-tunnel    不建立SSH隧道，直接运行 (默认: 建立隧道)"
+    echo "  -n, --top-k N      设置检索的相关文档数量 (默认: ${TOP_K})"
+}
+
+# 解析命令行参数
+KEEP_KB=false
+CLEAR_DB=false
+NO_CLEAR_DB=false
+NO_TUNNEL=false
+TOP_K=2
+
+while [[ $# -gt 0 ]]; do
+    case $1 in
+        -h|--help)
+            show_help
+            exit 0
+            ;;
+        -k|--keep-kb)
+            KEEP_KB=true
+            shift
+            ;;
+        -c|--clear-db)
+            CLEAR_DB=true
+            shift
+            ;;
+        -p|--preserve-db)
+            NO_CLEAR_DB=true
+            shift
+            ;;
+        -t|--no-tunnel)
+            NO_TUNNEL=true
+            shift
+            ;;
+        -n|--top-k)
+            if [[ $# -lt 2 ]] || [[ $2 =~ ^- ]]; then
+                print_error "选项 --top-k 需要一个数值参数"
+                exit 1
+            fi
+            TOP_K="$2"
+            shift 2
+            ;;
+        *)
+            print_error "未知选项: $1"
+            show_help
+            exit 1
+            ;;
+    esac
+done
+
 # 检查端口8001是否被占用（即判断隧道是否已经建立）
 check_port() {
     lsof -i:8001 > /dev/null 2>&1
@@ -91,20 +149,44 @@ if [ ! -f "requirements.txt" ] && [ "${USE_CONDA}" = false ]; then
     print_warning "未找到requirements.txt文件。可能缺少依赖项。"
 fi
 
-# 检查端口8001是否被占用，如果没有则建立SSH隧道
-if ! check_port; then
-    print_info "端口8001未被占用，需要建立SSH隧道"
-    setup_tunnel
-    if [ $? -ne 0 ]; then
-        print_error "无法建立SSH隧道，退出程序"
-        exit 1
+# 如果不是NO_TUNNEL模式，检查端口8001是否被占用，如果没有则建立SSH隧道
+if [ "${NO_TUNNEL}" = false ]; then
+    if ! check_port; then
+        print_info "端口8001未被占用，需要建立SSH隧道"
+        setup_tunnel
+        if [ $? -ne 0 ]; then
+            print_error "无法建立SSH隧道，退出程序"
+            exit 1
+        fi
+    else
+        print_info "端口8001已被占用，假定SSH隧道已建立"
     fi
 else
-    print_info "端口8001已被占用，假定SSH隧道已建立"
+    print_info "跳过SSH隧道建立，直接运行程序"
 fi
+
+# 准备RAG_BOT命令行参数
+RAG_ARGS=""
+if [ "${KEEP_KB}" = true ]; then
+    RAG_ARGS="${RAG_ARGS} --keep_kb"
+fi
+if [ "${CLEAR_DB}" = true ]; then
+    RAG_ARGS="${RAG_ARGS} --clear_db"
+fi
+if [ "${NO_CLEAR_DB}" = true ]; then
+    RAG_ARGS="${RAG_ARGS} --no_clear_db"
+fi
+RAG_ARGS="${RAG_ARGS} --top_k ${TOP_K}"
 
 # 运行程序
 print_info "开始运行RAG机器人..."
+print_info "运行参数:"
+print_info "  - 保留知识库: $([ "${KEEP_KB}" = true ] && echo "是" || echo "否") (--keep_kb)"
+print_info "  - 强制清除数据库: $([ "${CLEAR_DB}" = true ] && echo "是" || echo "否") (--clear_db)"
+print_info "  - 强制保留数据库: $([ "${NO_CLEAR_DB}" = true ] && echo "是" || echo "否") (--no_clear_db)"
+print_info "  - 检索文档数: ${TOP_K} (--top_k)"
+print_info "  - 跳过SSH隧道: $([ "${NO_TUNNEL}" = true ] && echo "是" || echo "否") (--no-tunnel)"
+print_info "命令行: ${PYTHON_CMD} rag_bot.py ${RAG_ARGS}"
 
 if [ "${USE_CONDA}" = true ]; then
     print_info "使用Conda环境: ${CONDA_ENV}"
@@ -121,16 +203,16 @@ if [ "${USE_CONDA}" = true ]; then
         print_warning "无法识别的操作系统，尝试通用激活方法"
         conda activate ${CONDA_ENV}
     fi
-    ${PYTHON_CMD} rag_bot.py
+    ${PYTHON_CMD} rag_bot.py ${RAG_ARGS}
 else
     print_info "使用系统Python"
-    ${PYTHON_CMD} rag_bot.py
+    ${PYTHON_CMD} rag_bot.py ${RAG_ARGS}
 fi
 
 print_info "程序已退出。"
 
 # 询问是否要关闭SSH隧道
-if check_port; then
+if [ "${NO_TUNNEL}" = false ] && check_port; then
     read -p "是否要关闭SSH隧道? (y/n): " close_tunnel
     if [ "$close_tunnel" = "y" ] || [ "$close_tunnel" = "Y" ]; then
         print_info "正在关闭SSH隧道..."
