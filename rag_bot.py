@@ -1,7 +1,6 @@
 import os
 import shutil
 from typing import List
-from dotenv import load_dotenv
 from langchain.chat_models import ChatOpenAI
 from langchain.text_splitter import RecursiveCharacterTextSplitter
 from langchain_community.vectorstores import Chroma
@@ -29,10 +28,19 @@ class RAGBot:
         )
         
         # 初始化嵌入模型
+        # 嵌入模型的作用：
+        # 1. 将文本转化为高维向量（通常是几百到上千维度的浮点数数组）
+        # 2. 这些向量捕捉了文本的语义信息，语义相似的文本在向量空间中距离较近
+        # 3. 通过计算向量间的距离或相似度，可以找到语义上相似的文本
         self.embeddings = HuggingFaceEmbeddings(
-            model_name="shibing624/text2vec-base-chinese",
-            model_kwargs={'device': 'cpu'},
-            encode_kwargs={'normalize_embeddings': True}
+            model_name="shibing624/text2vec-base-chinese",  # 中文文本向量模型
+            model_kwargs={'device': 'cpu'},  # 在CPU上运行模型
+            encode_kwargs={'normalize_embeddings': True}  # 向量归一化处理
+            # 向量归一化的意义：
+            # 1. 使所有向量长度为1，即将向量投影到单位超球面上
+            # 2. 归一化后，向量间的余弦相似度等价于点积，计算更简单
+            # 3. 消除了文本长度对相似度计算的影响，只关注语义方向
+            # 4. 便于使用余弦距离、欧氏距离等进行相似度计算
         )
         
         # 初始化文本分割器
@@ -43,6 +51,10 @@ class RAGBot:
         )
         
         # 初始化向量存储
+        # 向量存储的作用：
+        # 1. 存储文档的向量表示和原始内容
+        # 2. 提供高效的相似度搜索功能，快速找到与查询向量最相似的文档向量
+        # 3. 支持语义检索，而不仅仅是关键词匹配
         self.vectorstore = None
         
         # 存储文档切片
@@ -66,10 +78,15 @@ class RAGBot:
             print(f"内容: {chunk.page_content[:100]}...")
         
         # 创建向量存储
+        # 向量存储创建过程：
+        # 1. 将每个文档块通过嵌入模型转换为向量
+        # 2. 将向量与原始文档一起存储在ChromaDB中
+        # 3. ChromaDB内部使用高效索引结构(如HNSW、ANNOY等)来加速相似度搜索
+        # 4. 相似度搜索原理是在高维空间中找到距离最近的向量
         self.vectorstore = Chroma.from_documents(
             documents=splits,
             embedding=self.embeddings,
-            persist_directory="./chroma_db"
+            persist_directory="./chroma_db"  # 持久化存储目录，便于重复使用
         )
         
         # 打印 ChromaDB 存储信息
@@ -113,7 +130,13 @@ class RAGBot:
         print(f"问题: {question}")
         
         # 使用 _collection.query 直接获取相关性得分
+        # 第1步：将用户问题转换为向量表示
+        # 这里使用嵌入模型将文本问题转换为高维向量空间中的一个点
         query_embedding = self.embeddings.embed_query(question)
+        
+        # 第2步：在向量数据库中查询与问题向量最相似的文档向量
+        # n_results=4：返回最相似的4个文档
+        # include参数指定返回的信息，包括文档内容、嵌入向量、元数据和距离
         results = self.vectorstore._collection.query(
             query_embeddings=query_embedding,
             n_results=4,
@@ -123,17 +146,32 @@ class RAGBot:
         # 打印检索结果和相关性得分
         print(f"检索到 {len(results['documents'][0])} 个相关文档片段")
         for i, (doc, distance) in enumerate(zip(results['documents'][0], results['distances'][0])):
-            # 距离转换为相似度得分 (ChromaDB 返回的是距离，越小越相关)
-            similarity_score = 1 - distance  # 距离转换为相似度(0-1之间)
+            # 第3步：距离转换为相似度得分
+            # 相关性计算说明：
+            # 1. ChromaDB返回的是向量间的距离(distance)，距离越小表示越相似
+            # 2. 常见的距离计算方法包括：
+            #    - 余弦距离：1 - 余弦相似度，两个向量夹角的余弦值，范围为0-2，值越小越相似
+            #    - 欧氏距离：两点在欧氏空间中的直线距离
+            # 3. 这里使用 1-distance 将距离转换为相似度分数
+            #    - 当向量完全相同时，距离为0，相似度为1（最高）
+            #    - 当向量完全不同时，距离接近于1或更大，相似度接近于0或为负（最低）
+            # 4. 在归一化向量上（如本代码中设置normalize_embeddings=True）:
+            #    - 余弦距离范围通常是0-2
+            #    - 欧氏距离的平方范围通常是0-4
+            # 注意：具体的距离范围取决于ChromaDB的具体实现和设置
+            similarity_score = 1 - distance  # 将距离转换为相似度(通常为0-1之间)
+            
             print(f"\n相关文档 #{i+1}:")
             print(f"相关性得分: {similarity_score:.4f}")  # 保留4位小数
             print(f"内容: {doc[:150]}...")
         
-        # 使用检索器获取文档对象用于问答
+        # 第4步：使用检索器获取文档对象用于问答
+        # 这里使用LangChain的高级API获取相关文档，内部也是使用相似度搜索
         retriever = self.vectorstore.as_retriever()
         retrieved_docs = retriever.get_relevant_documents(question)
             
-        # 创建并调用问答链
+        # 第5步：创建并调用问答链
+        # 将检索到的文档和问题一起发送给语言模型生成回答
         chain = self.setup_qa_chain()
         response = chain.invoke({"query": question})
         return response["result"]
